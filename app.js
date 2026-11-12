@@ -134,7 +134,10 @@
             .filter(function (id) { return !S.questions[id]; });
           if (missing.length) {
             var qs = await sb.from('questions').select('*, question_options(*)').in('id', missing);
-            (qs.data || []).forEach(function (q) { S.questions[q.id] = q; });
+            (qs.data || []).forEach(function (q) {
+              q.question_options.sort(function (x, y) { return (x.position || 0) - (y.position || 0); });
+              S.questions[q.id] = q;
+            });
           }
         }
       }
@@ -249,9 +252,18 @@
     },
     pick: function (btn) {
       S.pick = btn.getAttribute('data-id');
-      el.main.querySelectorAll('.options button').forEach(function (b) {
-        b.classList.toggle('picked', b === btn);
-      });
+      var search = document.getElementById('search');
+      if (search) {
+        // typed entry: the chosen match fills the box and the suggestions go away
+        search.value = btn.textContent;
+        search.classList.add('chosen');
+        document.getElementById('suggest').innerHTML = '';
+        document.getElementById('hint').textContent = 'Change it by typing again';
+      } else {
+        el.main.querySelectorAll('.options button').forEach(function (b) {
+          b.classList.toggle('picked', b === btn);
+        });
+      }
       var lock = document.getElementById('lock');
       if (lock) { lock.disabled = false; lock.textContent = 'Lock in ' + btn.textContent; }
     },
@@ -272,18 +284,74 @@
     if (fn) fn(btn);
   });
 
+  // Plain lower-case text with accents and punctuation removed, for matching.
+  function plain(s) {
+    return String(s).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+  }
+
+  // Up to six answers that match what has been typed so far. Nothing is
+  // suggested until two characters are in, unless the text is an exact answer.
+  function suggest(q, text) {
+    var term = plain(text);
+    if (!term) return [];
+    var found = [];
+    q.question_options.forEach(function (o) {
+      var best = 9;
+      [o.label].concat(o.aliases || []).forEach(function (name) {
+        var n = plain(name), score = 9;
+        if (n === term) score = 0;
+        else if (term.length >= 2 && n.indexOf(term) === 0) score = 1;
+        else if (term.length >= 2 && (' ' + n).indexOf(' ' + term) !== -1) score = 2;
+        else if (term.length >= 3 && n.indexOf(term) !== -1) score = 3;
+        if (score < best) best = score;
+      });
+      if (best < 9) found.push({ o: o, score: best });
+    });
+    found.sort(function (a, b) {
+      return a.score - b.score || a.o.label.length - b.o.label.length || a.o.label.localeCompare(b.o.label);
+    });
+    return found.slice(0, 6).map(function (f) { return f.o; });
+  }
+
+  function currentQuestion() {
+    var round = currentRound();
+    return round ? S.questions[round.question_id] : null;
+  }
+
   document.addEventListener('input', function (e) {
     if (e.target.id !== 'search') return;
-    var term = e.target.value.trim().toLowerCase();
-    el.main.querySelectorAll('.options button').forEach(function (b) {
-      b.hidden = term !== '' && b.getAttribute('data-find').indexOf(term) === -1;
-    });
+    var q = currentQuestion(); if (!q) return;
+    var box = document.getElementById('suggest');
+    var hint = document.getElementById('hint');
+    var lock = document.getElementById('lock');
+    // typing again cancels an earlier choice
+    S.pick = null;
+    e.target.classList.remove('chosen');
+    if (lock) { lock.disabled = true; lock.textContent = 'Lock in'; }
+    var matches = suggest(q, e.target.value);
+    box.innerHTML = matches.map(function (o) {
+      return '<button data-act="pick" data-id="' + esc(o.id) + '">' + esc(o.label) + '</button>';
+    }).join('');
+    var len = plain(e.target.value).length;
+    hint.textContent = matches.length ? 'Pick a match'
+      : len === 0 ? 'Start typing and pick a match'
+      : len < 2 ? 'Keep typing'
+      : 'No match yet. Try another spelling or another answer.';
   });
 
   document.addEventListener('keydown', function (e) {
     if (e.key !== 'Enter') return;
     if (e.target.id === 'nick' || e.target.id === 'code') {
-      (S.urlCode || (document.getElementById('code') || {}).value) ? actions.join() : actions.create();
+      var codeBox = document.getElementById('code');
+      if (S.urlCode || (codeBox && codeBox.value.trim())) actions.join(); else actions.create();
+    } else if (e.target.id === 'search') {
+      if (S.pick) { actions.lock(); return; }
+      var first = document.querySelector('#suggest button');
+      var only = document.querySelectorAll('#suggest button').length === 1;
+      var q = currentQuestion();
+      var exact = first && q && plain(first.textContent) === plain(e.target.value);
+      if (first && (only || exact)) actions.pick(first);
     }
   });
 
@@ -302,7 +370,8 @@
     return {
       top: '',
       main:
-        '<h1 class="logo">Sheep</h1>' +
+        '<div class="hero"><h1 class="logo">Sheep</h1>' +
+        '<p class="tagline">Think like the leader and you are out.</p></div>' +
         '<ol class="rules">' +
         '<li>One player is the leader. Everyone answers the same question in secret.</li>' +
         '<li>Give the same answer as the leader and you are out.</li>' +
@@ -381,7 +450,7 @@
       main: watcherBanner() +
         '<div class="stage">' +
         '<p class="note">' + (mine ? 'This game' : 'The leader is') + '</p>' +
-        '<p class="big">' + (mine ? 'You are the leader' : esc(playerName(leaderId()))) + '</p>' +
+        '<p class="big glow pop">' + (mine ? 'You are the leader' : esc(playerName(leaderId()))) + '</p>' +
         '<p>' + (mine
           ? 'Answer like the flock. Anyone who matches you is out. Catch them all to win.'
           : 'Never give the same answer as the leader. Last five rounds to win.') + '</p>' +
@@ -409,20 +478,28 @@
         '<p class="big">' + esc(mine ? optionLabel(q.id, mine.option_id) : '') + '</p>' +
         '<p>Waiting for the others</p></div>';
     } else {
-      var search = q.input_type === 'SEARCH';
-      var opts = q.question_options.map(function (o) {
-        var find = (o.label + ' ' + (o.aliases || []).join(' ')).toLowerCase();
-        return '<button data-act="pick" data-id="' + esc(o.id) + '" data-find="' + esc(find) + '">' +
-          esc(o.label) + '</button>';
-      }).join('');
-      var cls = search ? 'options list' : (q.question_options.length <= 4 ? 'options wide' : 'options');
+      var typed = q.input_type === 'SEARCH';
+      var entry;
+      if (typed) {
+        // Big lists are never shown. Players type, and only close matches appear.
+        entry = '<div class="typed">' +
+          '<input type="text" id="search" placeholder="Type your answer" autocomplete="off" ' +
+          'autocorrect="off" spellcheck="false" aria-label="Your answer">' +
+          '<p class="hint" id="hint">Start typing and pick a match</p>' +
+          '<div class="options suggest" id="suggest"></div></div>';
+      } else {
+        entry = '<div class="' + (q.question_options.length <= 4 ? 'options wide' : 'options') + '">' +
+          q.question_options.map(function (o) {
+            return '<button data-act="pick" data-id="' + esc(o.id) + '">' + esc(o.label) + '</button>';
+          }).join('') + '</div>';
+      }
       body =
         '<p class="note">' + (amLeader
-          ? 'You are the leader. Pick what the flock will pick.'
+          ? 'You are the leader. Answer what the flock will answer.'
           : 'Do not match ' + esc(playerName(leaderId())) + '.') + '</p>' +
-        (search ? '<input type="text" id="search" placeholder="Type to search" autocomplete="off" aria-label="Search answers">' : '') +
-        '<div class="' + cls + '">' + opts + '</div>' +
-        '<button class="primary" id="lock" data-act="lock" disabled>Choose an answer</button>';
+        entry +
+        '<button class="primary" id="lock" data-act="lock" disabled>' +
+        (typed ? 'Lock in' : 'Choose an answer') + '</button>';
     }
 
     return {
@@ -465,7 +542,7 @@
       main:
         '<p class="note center">' + esc(q.prompt) + '</p>' +
         '<div class="center"><p class="note">' + esc(playerName(leaderId())) + ' the leader said</p>' +
-        '<p class="big">' + esc(optionLabel(q.id, round.leader_option_id)) + '</p></div>' +
+        '<p class="big glow pop">' + esc(optionLabel(q.id, round.leader_option_id)) + '</p></div>' +
         banner +
         '<ul class="people">' + rows + '</ul>',
       foot: ''
@@ -506,7 +583,7 @@
       top: '',
       main:
         '<div class="center"><p class="note">Game over</p>' +
-        '<p class="big">' + (leaderWon
+        '<p class="big glow pop">' + (leaderWon
           ? esc(playerName(leaderId())) + ' wins'
           : 'The flock wins') + '</p>' +
         '<p>' + (leaderWon
@@ -527,7 +604,7 @@
     if (S.screen === 'setup') {
       return {
         top: '',
-        main: '<h1 class="logo">Sheep</h1><p class="banner bad">' + esc(S.bootError) + '</p>',
+        main: '<div class="hero"><h1 class="logo">Sheep</h1></div><p class="banner bad">' + esc(S.bootError) + '</p>',
         foot: ''
       };
     }
