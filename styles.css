@@ -241,6 +241,43 @@ button:focus-visible, a:focus-visible { outline: 3px solid var(--moon); outline-
 .chips li.out { opacity: 0.4; text-decoration: line-through; }
 .chips li.lead { border-color: var(--moon); box-shadow: 0 0 10px rgba(255, 216, 107, 0.4); }
 
+/* ---------- Lobby extras: QR code, settings, remove ---------- */
+
+.qr { align-self: center; width: 9.5rem; padding: 0.4rem; background: var(--wool); border-radius: 1rem; box-shadow: 0 6px 0 var(--drop); }
+.qr svg { display: block; width: 100%; height: auto; }
+
+.small { font-size: 0.95rem; }
+.center-row { justify-content: center; gap: 1.5rem; }
+
+.settings {
+  display: grid; gap: 0.5rem;
+  padding: 1rem;
+  background: var(--panel); border: 1px solid var(--panel-edge); border-radius: 1rem;
+}
+.settings > p:not(.note) { font-weight: 600; margin-top: 0.35rem; }
+.settings > p:first-child { margin-top: 0; }
+
+.seg { display: flex; gap: 0.4rem; }
+.seg.wrap { flex-wrap: wrap; }
+.seg button {
+  flex: 1 1 auto;
+  padding: 0.55rem 0.8rem; font-size: 1rem; font-weight: 500;
+  background: rgba(8, 9, 30, 0.45); color: var(--wool);
+  border: 1px solid var(--panel-edge); box-shadow: none;
+}
+.seg button.on { background: var(--moon); color: var(--ink); border-color: transparent; font-weight: 600; }
+
+button.mini {
+  flex: none; padding: 0.3rem 0.7rem; font-size: 0.85rem; font-weight: 500;
+  background: none; color: var(--wool); border: 1px solid var(--panel-edge); box-shadow: none;
+}
+
+.people .name small { display: block; font-size: 0.85rem; font-weight: 400; opacity: 0.8; }
+.people .tag.total { font-size: 1.1rem; font-weight: 700; opacity: 1; }
+.people li.lead { border-color: var(--moon); }
+
+.big.wait { animation: pulse 0.9s ease-in-out infinite; }
+
 /* ---------- Toast ---------- */
 
 #toast {
