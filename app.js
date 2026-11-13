@@ -8,10 +8,15 @@
   var CFG = window.SHEEP_CONFIG || {};
   var REVEAL_SECONDS = 12;      // how long the server holds the reveal
   var SUSPENSE_MS = 4000;       // first part of the reveal, before the leader's answer drops
-  var THEMES = [
-    ['general', 'Everyday'], ['geography', 'Geography'], ['pop', 'Pop culture'],
-    ['science', 'Science and nature'], ['numbers', 'Numbers and chance']
+  // Question packs the host can switch on and off. An empty list in the
+  // room's settings means every pack is on.
+  var PACKS = [
+    ['general', 'Classics'], ['uk', 'UK culture'], ['pop', 'TV, film and music'],
+    ['memes', 'Internet and memes'], ['geography', 'Around the world'],
+    ['science', 'Science and nature'], ['numbers', 'Numbers and chance'],
+    ['drinking', 'Drinking (18+)']
   ];
+  var ALL_PACKS = PACKS.map(function (p) { return p[0]; });
 
   var sb = null;
   var S = {
@@ -111,6 +116,22 @@
       themes: Array.isArray(s.themes) ? s.themes : []
     };
   }
+
+  function packsOn() {
+    var t = settings().themes.filter(function (k) { return ALL_PACKS.indexOf(k) !== -1; });
+    return t.length ? t : ALL_PACKS.slice();
+  }
+
+  // What an answer says on screen: a listed option's label, or the typed text.
+  function said(q, a) {
+    if (!a) return '';
+    return a.option_id ? optionLabel(q.id, a.option_id) : (a.custom_text || '');
+  }
+
+  // Two answers match when their keys match (the server works these out).
+  function answerKey(a) { return a.option_id ? String(a.option_id) : 'c:' + a.custom_key; }
+  function leaderKey(round) { return round.leader_key || String(round.leader_option_id); }
+  function leaderSaid(q, round) { return round.leader_text || optionLabel(q.id, round.leader_option_id); }
 
   // ---------- sound and vibration ----------
 
@@ -383,10 +404,11 @@
       if (key === 'rounds') s.rounds = Number(val);
       else if (key === 'answer_seconds') s.answer_seconds = Number(val);
       else if (key === 'tight') s.tight = val === 'true';
-      else if (key === 'theme') {
-        if (val === 'all') s.themes = [];
-        else if (s.themes.indexOf(val) === -1) s.themes = s.themes.concat(val);
-        else s.themes = s.themes.filter(function (t) { return t !== val; });
+      else if (key === 'pack') {
+        var on = packsOn();
+        on = on.indexOf(val) === -1 ? on.concat(val) : on.filter(function (t) { return t !== val; });
+        if (!on.length) { toast('Keep at least one pack switched on'); return; }
+        s.themes = on.length === ALL_PACKS.length ? [] : on;
       }
       act(async function () {
         await rpc('update_settings', { p_room_id: S.roomId, p_settings: s });
@@ -430,10 +452,15 @@
       if (lock) { lock.disabled = false; lock.textContent = 'Lock in ' + btn.textContent; }
     },
     lock: function () {
-      if (!S.pick || !S.game) return;
+      if (!S.game) return;
       var option = S.pick;
+      var box = document.getElementById('search');
+      var q = currentQuestion();
+      var typed = box && q && q.allow_custom ? box.value.trim() : '';
+      if (!option && plain(typed).length < 2) return;
       act(async function () {
-        await rpc('submit_answer', { p_game_id: S.game.id, p_option_id: option });
+        if (option) await rpc('submit_answer', { p_game_id: S.game.id, p_option_id: option });
+        else await rpc('submit_custom_answer', { p_game_id: S.game.id, p_text: typed });
         sounds.lock();
         await refresh();
       });
@@ -517,9 +544,16 @@
       return '<button data-act="pick" data-id="' + esc(o.id) + '">' + esc(o.label) + '</button>';
     }).join('');
     var len = plain(e.target.value).length;
-    hint.textContent = matches.length ? 'Pick a match'
+    var open = !!q.allow_custom && len >= 2;
+    // open-ended questions take whatever is typed, listed or not
+    if (open && lock) {
+      lock.disabled = false;
+      lock.textContent = 'Lock in "' + e.target.value.trim() + '"';
+    }
+    hint.textContent = matches.length ? (open ? 'Pick a match, or lock in what you typed' : 'Pick a match')
       : len === 0 ? 'Start typing and pick a match'
       : len < 2 ? 'Keep typing'
+      : open ? 'Not on our list, but you can lock it in'
       : 'No match yet. Try another spelling or another answer.';
   });
 
@@ -578,9 +612,9 @@
 
   function settingsSummary() {
     var s = settings();
-    var themes = s.themes.length
-      ? THEMES.filter(function (t) { return s.themes.indexOf(t[0]) !== -1; }).map(function (t) { return t[1].toLowerCase(); }).join(', ')
-      : 'all themes';
+    var on = packsOn();
+    var themes = on.length === ALL_PACKS.length ? 'all packs'
+      : on.length + (on.length === 1 ? ' pack' : ' packs') + ' on';
     return s.rounds + ' rounds, ' + s.answer_seconds + ' seconds to answer, ' +
       (s.tight ? 'tight early rounds, ' : '') + themes;
   }
@@ -596,9 +630,9 @@
       '<p class="note small">' + (s.tight
         ? 'Tight: smaller answer lists early on, so matches come sooner.'
         : 'Wide open: huge answer lists early on, so the first rounds are safer.') + '</p>' +
-      '<p>Question themes</p><div class="seg wrap">' +
-        seg('theme', 'all', 'All', s.themes.length === 0) +
-        THEMES.map(function (t) { return seg('theme', t[0], t[1], s.themes.indexOf(t[0]) !== -1); }).join('') + '</div>' +
+      '<p>Question packs</p><div class="seg wrap">' +
+        PACKS.map(function (t) { return seg('pack', t[0], t[1], packsOn().indexOf(t[0]) !== -1); }).join('') + '</div>' +
+      '<p class="note small">Tap a pack to switch it on or off.</p>' +
       '</div>';
   }
 
@@ -706,7 +740,7 @@
       body = watcherBanner();
     } else if (mine || gp.last_answered_round >= S.game.current_round) {
       body = '<div class="stage"><p class="note">' + (ghost ? 'Your guess' : 'Locked in') + '</p>' +
-        '<p class="big">' + esc(mine ? optionLabel(q.id, mine.option_id) : '') + '</p>' +
+        '<p class="big">' + esc(said(q, mine)) + '</p>' +
         '<p>Waiting for the others</p></div>';
     } else {
       var typed = q.input_type === 'SEARCH';
@@ -714,7 +748,7 @@
       if (typed) {
         // Big lists are never shown. Players type, and only close matches appear.
         entry = '<div class="typed">' +
-          '<input type="text" id="search" placeholder="Type your answer" autocomplete="off" ' +
+          '<input type="text" id="search" maxlength="40" placeholder="Type your answer" autocomplete="off" ' +
           'autocorrect="off" spellcheck="false" aria-label="Your answer">' +
           '<p class="hint" id="hint">Start typing and pick a match</p>' +
           '<div class="options suggest" id="suggest"></div></div>';
@@ -776,7 +810,7 @@
           banner = '<p class="banner good pop">You are safe</p>';
         } else {
           var guess = answerOf(round.id, S.me);
-          if (guess && guess.option_id === round.leader_option_id) {
+          if (guess && answerKey(guess) === leaderKey(round)) {
             playOnce('fate:' + key, 'safe');
             banner = '<p class="banner good pop">Good guess. Bonus point.</p>';
           }
@@ -791,10 +825,10 @@
     }).map(function (g) {
       var a = answerOf(round.id, g.player_id);
       var hit = g.eliminated_round === n;
-      var said = a ? optionLabel(q.id, a.option_id) : 'No answer';
+      var text = a ? said(q, a) : 'No answer';
       var cls = drop ? (hit ? 'hit' : 'safe') : '';
       return '<li class="' + cls + '"><span class="name">' + esc(playerName(g.player_id)) +
-        '</span><span class="tag">' + esc(said) + (drop && hit ? ', out' : '') + '</span></li>';
+        '</span><span class="tag">' + esc(text) + (drop && hit ? ', out' : '') + '</span></li>';
     }).join('');
 
     var ghosts = '';
@@ -803,9 +837,9 @@
         return g.role === 'FLOCK' && g.status === 'ELIMINATED' && g.eliminated_round < n && answerOf(round.id, g.player_id);
       }).map(function (g) {
         var a = answerOf(round.id, g.player_id);
-        var right = a.option_id === round.leader_option_id;
+        var right = answerKey(a) === leaderKey(round);
         return '<li class="' + (right ? 'safe' : 'out') + '"><span class="name">' + esc(playerName(g.player_id)) +
-          '</span><span class="tag">' + esc(optionLabel(q.id, a.option_id)) + (right ? ', +1' : '') + '</span></li>';
+          '</span><span class="tag">' + esc(said(q, a)) + (right ? ', +1' : '') + '</span></li>';
       }).join('');
       if (ghosts) ghosts = '<h2>Guesses from players already out</h2><ul class="people">' + ghosts + '</ul>';
     }
@@ -816,7 +850,7 @@
         '<p class="note center">' + esc(q.prompt) + '</p>' +
         '<div class="center"><p class="note">' + esc(playerName(leaderId())) + ' the leader said</p>' +
         (drop
-          ? '<p class="big glow pop">' + esc(optionLabel(q.id, round.leader_option_id)) + '</p>'
+          ? '<p class="big glow pop">' + esc(leaderSaid(q, round)) + '</p>'
           : '<p class="big glow wait">?</p>') + '</div>' +
         banner +
         '<ul class="people">' + rows + '</ul>' + ghosts,
@@ -855,7 +889,7 @@
     var history = S.rounds.filter(function (r) { return r.revealed_at; }).map(function (r) {
       var q = S.questions[r.question_id];
       return '<li><span class="name">' + esc(q ? q.prompt : 'Round ' + r.round_number) + '</span>' +
-        '<span class="tag">' + esc(q ? optionLabel(q.id, r.leader_option_id) : '') + '</span></li>';
+        '<span class="tag">' + esc(q ? leaderSaid(q, r) : '') + '</span></li>';
     }).join('');
 
     var action = isHost()
