@@ -37,7 +37,8 @@
     top: document.getElementById('top'),
     main: document.getElementById('main'),
     foot: document.getElementById('foot'),
-    toast: document.getElementById('toast')
+    toast: document.getElementById('toast'),
+    field: document.getElementById('field')
   };
   var lastHtml = { top: null, main: null, foot: null };
   var channel = null, pollTimer = null, toastTimer = null;
@@ -572,6 +573,126 @@
     }
   });
 
+  // ---------- the field of sheep ----------
+  // Every player has a sheep. The leader's sheep stands at the front of a
+  // line; a player who is out trots over and follows it. Everyone else grazes.
+
+  var SCARVES = ['#FF5D6C', '#FFD86B', '#8DE8BF', '#6CC4FF', '#C59BFF', '#FF9F5A',
+    '#FF8AD8', '#7BE0E8', '#B6E36B', '#F2F2F2', '#FFB3B3', '#9AA7FF'];
+  var FIELD_COLS = 6, FIELD_ROW = 68;
+  var sheepEls = {};   // player id -> element, kept between redraws so sheep can walk
+
+  function sheepSvg(scarf) {
+    var wool = '#FFF8E7', face = '#14152F';
+    return '<svg viewBox="0 0 66 54" aria-hidden="true">' +
+      '<g fill="' + face + '"><rect x="17" y="36" width="4.5" height="14" rx="2"/><rect x="25" y="38" width="4.5" height="12" rx="2"/>' +
+      '<rect x="36" y="38" width="4.5" height="12" rx="2"/><rect x="44" y="36" width="4.5" height="14" rx="2"/></g>' +
+      '<g fill="' + wool + '"><circle cx="13" cy="29" r="7"/><circle cx="21" cy="24" r="10"/><circle cx="31" cy="19" r="11"/>' +
+      '<circle cx="42" cy="22" r="10"/><circle cx="46" cy="31" r="9"/><circle cx="34" cy="33" r="11"/><circle cx="22" cy="34" r="9"/></g>' +
+      '<rect x="44" y="31" width="11" height="5" rx="2.5" fill="' + scarf + '"/>' +
+      '<ellipse cx="47" cy="19" rx="5" ry="2.6" transform="rotate(-28 47 19)" fill="' + face + '"/>' +
+      '<ellipse cx="54" cy="24" rx="8" ry="9.5" fill="' + face + '"/>' +
+      '<circle cx="51" cy="14.5" r="5.5" fill="' + wool + '"/>' +
+      '<g class="eye"><circle cx="56.5" cy="22" r="2.6" fill="#fff"/><circle cx="57.2" cy="22" r="1.2" fill="' + face + '"/></g>' +
+      '<g class="eye-follow" fill="none" stroke="#FFD86B" stroke-width="1.1"><circle cx="56.5" cy="22" r="3"/><circle cx="56.5" cy="22" r="1.1"/></g>' +
+      '<path class="crown" d="M46 9.5l1.5-7 3.5 4 3-5.5 3 5.5 3.5-4 1.5 7z" fill="#FFD86B" stroke="#B98A14" stroke-width="0.8" stroke-linejoin="round"/>' +
+      '<g class="tick"><circle cx="11" cy="10" r="7.5" fill="#8DE8BF"/><path d="M7.5 10.2l2.6 2.6 4.6-5.2" fill="none" stroke="#14152F" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></g>' +
+      '</svg>';
+  }
+
+  function updateField() {
+    var field = el.field;
+    if (!field) return;
+    var show = S.screen === 'room' && S.room && S.room.status !== 'CLOSED';
+    if (!show) {
+      field.hidden = true;
+      Object.keys(sheepEls).forEach(function (id) { sheepEls[id].remove(); delete sheepEls[id]; });
+      return;
+    }
+    field.hidden = false;
+
+    var g = S.room.status === 'IN_GAME' ? S.game : null;
+    var parade = [], grazing = [], spots = [], label;
+
+    if (g) {
+      var round = g.current_round;
+      var suspense = g.state === 'REVEAL' && revealBeat() === 'suspense';
+      var flockWon = g.state === 'GAME_OVER' && g.winner_side === 'FLOCK';
+      var leaderWon = g.state === 'GAME_OVER' && g.winner_side === 'LEADER';
+      var leader = null;
+      S.gps.forEach(function (gp) {
+        var out = gp.status === 'ELIMINATED' && !(suspense && gp.eliminated_round === round);
+        var item = {
+          id: gp.player_id, out: out, when: gp.eliminated_round || 0,
+          lead: gp.role === 'LEADER',
+          done: g.state === 'ANSWERING' && gp.last_answered_round >= round,
+          happy: gp.role === 'LEADER' ? leaderWon : (flockWon && !out)
+        };
+        if (item.lead) leader = item; else if (out) parade.push(item); else grazing.push(item);
+      });
+      parade.sort(function (a, b) { return a.when - b.when || playerName(a.id).localeCompare(playerName(b.id)); });
+      if (leader) parade.unshift(leader);
+      grazing.sort(function (a, b) { return playerName(a.id).localeCompare(playerName(b.id)); });
+      var answered = S.gps.filter(function (gp) { return gp.last_answered_round >= round; }).length;
+      label = (parade.length - 1) + ' following the leader, ' + grazing.length + ' still free' +
+        (g.state === 'ANSWERING' ? ', ' + answered + ' of ' + S.gps.length + ' have answered' : '');
+    } else {
+      grazing = S.players.filter(function (p) { return p.is_connected && !p.is_banned; })
+        .map(function (p) { return { id: p.id }; });
+      label = grazing.length + ' sheep in the field';
+    }
+
+    // the line: leader at the right-hand end, followers queueing behind to the left
+    parade.forEach(function (item, i) {
+      item.row = Math.floor(i / FIELD_COLS);
+      item.col = FIELD_COLS - 1 - (i % FIELD_COLS);
+      spots.push(item);
+    });
+    var paradeRows = Math.ceil(parade.length / FIELD_COLS);
+    // the rest graze below, centred
+    grazing.forEach(function (item, j) {
+      var r = Math.floor(j / FIELD_COLS);
+      var inRow = Math.min(FIELD_COLS, grazing.length - r * FIELD_COLS);
+      item.row = paradeRows + r;
+      item.col = (FIELD_COLS - inRow) / 2 + (j % FIELD_COLS);
+      spots.push(item);
+    });
+    var rows = paradeRows + Math.ceil(grazing.length / FIELD_COLS);
+    field.style.height = (Math.max(1, rows) * FIELD_ROW + 12) + 'px';
+    field.setAttribute('aria-label', label);
+
+    var seen = {};
+    spots.forEach(function (item) {
+      seen[item.id] = true;
+      var node = sheepEls[item.id];
+      var left = ((item.col + 0.5) / FIELD_COLS * 100).toFixed(2) + '%';
+      var top = (item.row * FIELD_ROW + 8) + 'px';
+      if (!node) {
+        var index = S.players.findIndex(function (p) { return p.id === item.id; });
+        node = document.createElement('div');
+        node.className = 'sheep';
+        node.innerHTML = sheepSvg(SCARVES[(index < 0 ? 0 : index) % SCARVES.length]) + '<span></span>';
+        node.style.left = left; node.style.top = top;
+        field.appendChild(node);
+        sheepEls[item.id] = node;
+      } else if (node.style.left !== left || node.style.top !== top) {
+        node.style.left = left; node.style.top = top;
+        node.classList.add('walk');
+        clearTimeout(node._walk);
+        node._walk = setTimeout(function () { node.classList.remove('walk'); }, 1500);
+      }
+      node.lastChild.textContent = playerName(item.id);
+      node.classList.toggle('lead', !!item.lead);
+      node.classList.toggle('follow', !!item.out);
+      node.classList.toggle('done', !!item.done);
+      node.classList.toggle('happy', !!item.happy);
+      node.classList.toggle('you', item.id === S.me);
+    });
+    Object.keys(sheepEls).forEach(function (id) {
+      if (!seen[id]) { sheepEls[id].remove(); delete sheepEls[id]; }
+    });
+  }
+
   // ---------- screens ----------
 
   function muteButton() {
@@ -591,7 +712,7 @@
     return {
       top: '',
       main:
-        '<div class="hero"><h1 class="logo">Sheep</h1>' +
+        '<div class="hero"><div class="hero-sheep">' + sheepSvg('#FF5D6C') + '</div><h1 class="logo">Sheep</h1>' +
         '<p class="tagline">Think like the leader and you are out.</p></div>' +
         '<ol class="rules">' +
         '<li>One player is the leader. Everyone answers the same question in secret.</li>' +
@@ -693,21 +814,6 @@
     return myGp() ? '' : '<p class="banner info">This game started before you joined. You are in the next one.</p>';
   }
 
-  function chipsFoot() {
-    var round = S.game.current_round;
-    var chips = S.gps.slice().sort(function (a, b) {
-      return (a.role === 'LEADER' ? 0 : 1) - (b.role === 'LEADER' ? 0 : 1);
-    }).map(function (g) {
-      var cls = [];
-      if (g.role === 'LEADER') cls.push('lead');
-      if (g.status === 'ELIMINATED') cls.push('out');
-      else if (g.last_answered_round >= round) cls.push('done');
-      return '<li class="' + cls.join(' ') + '">' + esc(playerName(g.player_id)) +
-        (g.role === 'LEADER' ? ' (leader)' : '') + '</li>';
-    }).join('');
-    return '<ul class="chips" aria-label="Who has answered">' + chips + '</ul>';
-  }
-
   function leaderRevealView() {
     var mine = leaderId() === S.me;
     playOnce('start:' + S.game.id, 'start');
@@ -773,7 +879,7 @@
     return {
       top: topBar(roundLabel()),
       main: '<h1>' + esc(q.prompt) + '</h1>' + body,
-      foot: chipsFoot()
+      foot: ''
     };
   }
 
@@ -946,6 +1052,7 @@
     setRegion('top', v.top);
     setRegion('main', v.main);
     setRegion('foot', v.foot);
+    updateField();
     tick();
   }
 

@@ -278,6 +278,46 @@ button.mini {
 
 .big.wait { animation: pulse 0.9s ease-in-out infinite; }
 
+/* ---------- The field of sheep ---------- */
+
+#field {
+  position: relative; flex: none; overflow: hidden;
+  border-radius: 1rem;
+  background: linear-gradient(180deg, #2A6B5B 0%, var(--hill-far) 45%, var(--hill) 100%);
+  border: 1px solid var(--panel-edge);
+  transition: height 0.4s ease;
+}
+#field[hidden] { display: none; }
+
+.sheep {
+  position: absolute; width: 56px; margin-left: -28px; text-align: center;
+  transition: left 1.4s ease-in-out, top 1.4s ease-in-out;
+  animation: pop 0.5s cubic-bezier(0.2, 1.5, 0.4, 1) both;
+}
+.sheep svg { display: block; width: 56px; height: 46px; overflow: visible; }
+.sheep span {
+  display: block; max-width: 56px; margin-top: -1px;
+  font-size: 0.68rem; line-height: 1.1; font-weight: 500;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.sheep.you span { color: var(--moon); font-weight: 700; }
+
+.sheep .crown, .sheep .tick, .sheep .eye-follow { display: none; }
+.sheep.lead .crown, .sheep.done .tick, .sheep.follow .eye-follow { display: inline; }
+.sheep.follow .eye { display: none; }
+.sheep.follow svg { filter: saturate(0.5) brightness(0.82); }
+.sheep.follow span { opacity: 0.7; }
+
+.sheep.walk svg { animation: trot 0.3s ease-in-out infinite; }
+.sheep.happy svg { animation: hop 0.6s ease-in-out infinite; }
+
+.hero-sheep { position: absolute; top: 2.4rem; right: 6.2rem; width: 4.4rem; }
+.hero-sheep svg { display: block; width: 100%; height: auto; overflow: visible; }
+.hero-sheep .crown, .hero-sheep .tick, .hero-sheep .eye-follow { display: none; }
+
+@keyframes trot { 50% { transform: translateY(-4px) rotate(-4deg); } }
+@keyframes hop { 50% { transform: translateY(-10px); } }
+
 /* ---------- Toast ---------- */
 
 #toast {
